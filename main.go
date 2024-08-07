@@ -1,86 +1,117 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	keyvaluestore "github.com/defoeam/kvs/kv"
+	"github.com/gin-gonic/gin"
 )
 
-// HandleSet handles the HTTP endpoint for setting key-value pairs.
-func HandleSet(kv *keyvaluestore.KeyValueStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Key   string `json:"key"`
-			Value string `json:"Value"`
-		}
+/*
+handleGet returns a gin.HandlerFunc that retrieves the value associated with the provided key from the KeyValueStore.
+If the key is missing or not found, it responds with an appropriate HTTP status and error message.
 
-		err := json.NewDecoder(r.Body).Decode(&req)
-		if err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
+Example Request:
 
-		kv.Set(req.Key, req.Value)
-		w.WriteHeader(http.StatusOK)
+	GET /get/:key
+
+Example Response:
+
+	{
+	  "key": "exampleKey",
+	  "value": "exampleValue"
 	}
-}
+*/
+func handleGet(kv *keyvaluestore.KeyValueStore) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		key := ctx.Param("key")
 
-// HandleGet handles the HTTP endpoint for retrieving value by key.
-func HandleGet(kv *keyvaluestore.KeyValueStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		key := r.URL.Query().Get("key")
+		// Check if empty key
 		if key == "" {
-			http.Error(w, "Key parameter is missing", http.StatusBadRequest)
+			ctx.JSON(http.StatusBadRequest, gin.H{"message": "Key parameter is missing"})
 			return
 		}
 
+		// Check if key exists and get value
 		val, ok := kv.Get(key)
 		if !ok {
-			http.Error(w, "Key not found", http.StatusNotFound)
+			ctx.JSON(http.StatusNotFound, gin.H{"message": "Key not found"})
 			return
 		}
 
-		resp := struct {
+		// Build response
+		res := struct {
 			Key   string `json:"key"`
 			Value string `json:"value"`
 		}{Key: key, Value: val}
 
-		w.Header().Set("Content-Type", "application/json")
+		// Serialize response
+		ctx.JSON(http.StatusAccepted, res)
+	}
+}
 
-		err := json.NewEncoder(w).Encode(resp)
+/*
+handleSet returns a gin.HandlerFunc that sets a key-value pair in the KeyValueStore.
+The key and value are provided in the JSON request body. It responds with the created key-value pair.
+
+Example Request:
+
+	POST /set
+	{
+	   "key": "exampleKey",
+	   "value": "exampleValue"
+	}
+
+Example Response:
+
+	{
+	   "key": "exampleKey",
+	   "value": "exampleValue"
+	}
+*/
+func handleSet(kv *keyvaluestore.KeyValueStore) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		// Define key/value request structure
+		var req struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		}
+
+		// Bind JSON to key/value request structure
+		err := ctx.BindJSON(&req)
 		if err != nil {
-			http.Error(w, "Failed to json encode", http.StatusInternalServerError)
+			ctx.JSON(http.StatusBadRequest, gin.H{"message": "Failed to bind json, incorrect parameter(s)"})
 			return
 		}
+
+		// Add to kv storage
+		kv.Set(req.Key, req.Value)
+
+		// Serialize response
+		ctx.JSON(http.StatusCreated, req)
 	}
 }
 
 func main() {
 	// Create a new instance of KeyValueStore.
 	kv := keyvaluestore.NewKeyValueStore()
-	// Set up HTTP handlers
-	http.HandleFunc("/set", HandleSet(kv))
-	http.HandleFunc("/get", HandleGet(kv))
 
-	// Timeout multiplier, this fixes the magic number linting error
-	timeoutMultiplier := 10
+	// Setup gin engine
+	router := gin.Default()
 
-	// Start the HTTP server.
+	// GET endpoints
+	router.GET("/get/:key", handleGet(kv))
+
+	// POST endpoints
+	router.POST("/set", handleSet(kv))
+
+	// Get address
 	port := 8080
 	addr := fmt.Sprintf(":%d", port)
-	readTimeout := time.Duration(timeoutMultiplier) * time.Second
-	writeTimeout := time.Duration(timeoutMultiplier) * time.Second
-	server := &http.Server{
-		Addr:         addr,
-		ReadTimeout:  readTimeout,
-		WriteTimeout: writeTimeout,
-	}
 
+	// Start server
 	log.Printf("Starting key-value store on http://localhost%s\n", addr)
-
-	log.Fatal(server.ListenAndServe())
+	log.Fatal(router.Run(addr))
 }
